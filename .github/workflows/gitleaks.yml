@@ -1,0 +1,39 @@
+name: gitleaks
+
+# Reusable org-wide secret scanner (Amperstrand/.github#1).
+# Full git-history scan with the pinned gitleaks binary — no third-party
+# action dependency, no license question, deterministic version.
+#
+# Callers add:
+#   jobs:
+#     gitleaks:
+#       uses: Amperstrand/.github/.github/workflows/gitleaks.yml@main
+#
+# Caller repos may drop a .gitleaks.toml at their root; it is picked up
+# automatically for allowlists (test fixtures, remediated historical paths).
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks (full git history)
+        run: |
+          set -euo pipefail
+          VERSION="8.30.1"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tgz
+          tar -xzf /tmp/gitleaks.tgz -C /usr/local/bin gitleaks
+          CONFIG=""
+          if [ -f .gitleaks.toml ]; then CONFIG="--config .gitleaks.toml"; fi
+          gitleaks git . --redact --verbose $CONFIG

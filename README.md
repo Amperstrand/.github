@@ -1,10 +1,37 @@
 # Amperstrand/.github
 
-Org-level reusable workflows and engineering practice documentation for Amperstrand Rust embedded projects.
+Org-level reusable workflows and engineering practice documentation for Amperstrand projects.
 
 ## Purpose
 
 This repo hosts shared CI infrastructure and discipline docs that apply across the organization, decoupled from any specific product or license domain.
+
+- **Reusable workflows** (`.github/workflows/`) — CI jobs that multiple repos consume via `uses:`.
+- **Practice docs** (`LICENSES-PROVENANCE-PRACTICE.md`) — Engineering discipline for provenance and license decisions before extracting shared code.
+
+## Workflows
+
+### `gitleaks.yml` — org-wide secret scanning
+
+Runs the pinned gitleaks binary (8.30.1) over the **full git history** of the caller repo.
+No third-party action, no license dependency. Callers enroll with:
+
+```yaml
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    - cron: "23 4 * * *"
+
+jobs:
+  gitleaks:
+    uses: Amperstrand/.github/.github/workflows/gitleaks.yml@main
+```
+
+A caller-root `.gitleaks.toml` is picked up automatically — use it for allowlists
+(test fixtures with throwaway keys, remediated historical paths), each entry with a
+comment saying **why** it is safe.
 
 - **Reusable workflows** (`.github/workflows/`) — CI jobs that multiple repos consume via `uses:`.
 - **Practice docs** (`LICENSES-PROVENANCE-PRACTICE.md`) — Engineering discipline for provenance and license decisions before extracting shared code.
