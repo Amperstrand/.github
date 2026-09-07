@@ -36,12 +36,10 @@ jobs:
               "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
               -o /tmp/gitleaks.tgz; then
             echo "release CDN unavailable — falling back to the pinned Docker image"
-            CONFIG_ARGS=""
-            if [ -f .gitleaks.toml ]; then CONFIG_ARGS="--config .gitleaks.toml"; fi
+            DOCKER_CONFIG=""
+            if [ -f .gitleaks.toml ]; then DOCKER_CONFIG="--config /repo/.gitleaks.toml"; fi
             docker run --rm -v "$PWD:/repo" "zricethezav/gitleaks:v${VERSION}" \
-              git /repo --redact --verbose --no-git --config "/repo/.gitleaks.toml" 2>/dev/null \
-              || docker run --rm -v "$PWD:/repo" "zricethezav/gitleaks:v${VERSION}" \
-                   git /repo --redact --verbose $CONFIG_ARGS
+              git /repo --redact --verbose $DOCKER_CONFIG
             exit $?
           fi
           tar -xzf /tmp/gitleaks.tgz -C /usr/local/bin gitleaks
