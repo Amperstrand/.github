@@ -28,21 +28,39 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Run gitleaks (full git history)
+      # NOTE (2026-10-07): this workflow failed with zero output on every
+      # event since 2026-10-05 across all callers. Rebuilt scoped-by-event
+      # (same fix the three active repos already shipped locally as
+      # tollgate-module-basic-go#108 / PRTA#22 / omarchy-cashu#64):
+      #   pull_request -> new commits only (fast, always relevant)
+      #   push         -> the pushed range (direct pushes skip PR scans)
+      #   schedule     -> full history (rule updates + old smuggles)
+      # Callers' repo .gitleaks.toml MUST start with:
+      #   [extend]\nuseDefault = true
+      # — a config without it silently REPLACES the default ruleset
+      # (found live in PRTA and nodns-poc). And allowlists suppressing
+      # generic-api-key need regexTarget = "match" (the "secret" target
+      # does not apply to that rule's group resolution).
+      - name: Run gitleaks (scoped by event)
         run: |
           set -euo pipefail
           VERSION="8.30.1"
-          if ! curl -sSfL --retry 5 --retry-delay 5 --retry-all-errors \
-              "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
-              -o /tmp/gitleaks.tgz; then
-            echo "release CDN unavailable — falling back to the pinned Docker image"
-            DOCKER_CONFIG=""
-            if [ -f .gitleaks.toml ]; then DOCKER_CONFIG="--config /repo/.gitleaks.toml"; fi
-            docker run --rm -v "$PWD:/repo" "zricethezav/gitleaks:v${VERSION}" \
-              git /repo --redact --verbose $DOCKER_CONFIG
-            exit $?
-          fi
+          curl -sSfL --retry 5 --retry-delay 5 --retry-all-errors \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
+            -o /tmp/gitleaks.tgz
           tar -xzf /tmp/gitleaks.tgz -C /usr/local/bin gitleaks
           CONFIG=""
-          if [ -f .gitleaks.toml ]; then CONFIG="--config .gitleaks.toml"; fi
-          gitleaks git . --redact --verbose $CONFIG
+          [ -f .gitleaks.toml ] && CONFIG="--config .gitleaks.toml"
+          BASE=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            BASE="${{ github.event.before }}"
+          fi
+          if [ -n "${BASE:-}" ] && git cat-file -e "$BASE" 2>/dev/null; then
+            echo "scanning new commits only: $BASE..HEAD"
+            gitleaks git . --redact --verbose $CONFIG --log-opts="$BASE..HEAD"
+          else
+            echo "no resolvable base — scanning full history"
+            gitleaks git . --redact --verbose $CONFIG
+          fi
