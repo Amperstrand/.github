@@ -108,18 +108,31 @@ jobs:
       - name: Run clippy (host)
         # Embedded crates with target-gated unsafe lint cleanly on their MCU
         # target only; when clippy-target is set, that pass is authoritative.
+        # --all-targets also lints tests/benches/examples/build.rs.
         if: inputs.clippy-target == ''
         working-directory: ${{ inputs.workspace-path }}
         env:
           RUSTFLAGS: "-D warnings"
-        run: cargo clippy ${{ inputs.clippy-flags }} -- -D warnings
+        run: cargo clippy --all-targets ${{ inputs.clippy-flags }} -- -D warnings
 
       - name: Run clippy (cross-compile)
         if: inputs.clippy-target != ''
         working-directory: ${{ inputs.workspace-path }}
         env:
           RUSTFLAGS: "-D warnings"
-        run: cargo clippy ${{ inputs.clippy-flags }} --target ${{ inputs.clippy-target }} -- -D warnings
+        # Bare-metal targets (*-none-eabi[hf]) have no std/libtest, so
+        # --all-targets cannot compile test/bench harnesses and the lint
+        # job dies before checking the firmware. Lint the firmware surface
+        # (--lib --bins) there; hosted targets (incl. *-espidf, which has
+        # std) keep --all-targets. Callers wanting tests linted alongside a
+        # bare-metal pass should invoke the workflow a second time with an
+        # empty clippy-target (host pass).
+        run: |
+          case "${{ inputs.clippy-target }}" in
+            *-none-eabi|*-none-eabihf) TARGETS="--lib --bins" ;;
+            *) TARGETS="--all-targets" ;;
+          esac
+          cargo clippy $TARGETS ${{ inputs.clippy-flags }} --target ${{ inputs.clippy-target }} -- -D warnings
 
   host-test:
     name: Host Tests
