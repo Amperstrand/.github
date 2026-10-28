@@ -14,13 +14,21 @@ name: gitleaks
 
 on:
   workflow_call:
+    inputs:
+      # JSON runs-on array. Defaults to hosted so existing public callers
+      # are unaffected; billing-blocked private callers opt in with
+      # '["self-hosted", "legion-vm"]' (Amperstrand/ops#43).
+      runner:
+        required: false
+        type: string
+        default: '["ubuntu-latest"]'
 
 permissions:
   contents: read
 
 jobs:
   gitleaks:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 30
     steps:
       - name: Checkout (full history)
