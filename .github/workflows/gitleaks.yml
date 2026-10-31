@@ -49,14 +49,44 @@ jobs:
       # (found live in PRTA and nodns-poc). And allowlists suppressing
       # generic-api-key need regexTarget = "match" (the "secret" target
       # does not apply to that rule's group resolution).
+      #
+      # NOTE (2026-10-30): install failures were masquerading as leak
+      # findings — on the legion-vm self-hosted runner the tarball download
+      # died with curl exit 23 ("Failure writing output to destination",
+      # i.e. /tmp write failure, likely ENOSPC) and the job showed a plain
+      # red "gitleaks" with no findings context (cashu-cf push runs since
+      # 10-29). Install is now its own step: $RUNNER_TEMP destination,
+      # binary validation, pinned-Docker fallback, and an explicit
+      # install-vs-leak error message.
+
+      - name: Install gitleaks v8.30.1 (pinned; Docker fallback)
+        run: |
+          set -uo pipefail
+          VERSION="8.30.1"
+          BINDIR="${RUNNER_TEMP:-/tmp}"
+          TGZ="${BINDIR}/gitleaks.tgz"
+          URL="https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
+          if curl -sSfL --retry 3 --retry-delay 5 --retry-all-errors "$URL" -o "$TGZ" \
+             && tar -xzf "$TGZ" -C "$BINDIR" gitleaks \
+             && "$BINDIR/gitleaks" version >/dev/null 2>&1; then
+            echo "gitleaks binary OK: $BINDIR/gitleaks ($("$BINDIR/gitleaks" version))"
+            echo "GITLEAKS_CMD=$BINDIR/gitleaks" >> "$GITHUB_ENV"
+          elif command -v docker >/dev/null 2>&1 \
+             && docker pull -q "zricethezav/gitleaks:v${VERSION}" >/dev/null 2>&1; then
+            echo "binary install to ${BINDIR} failed — using pinned Docker image zricethezav/gitleaks:v${VERSION}"
+            {
+              echo "GITLEAKS_CMD<<GITLEAKS_EOF"
+              echo "docker run --rm -v ${PWD}:/src -w /src zricethezav/gitleaks:v${VERSION}"
+              echo "GITLEAKS_EOF"
+            } >> "$GITHUB_ENV"
+          else
+            echo "::error::gitleaks INSTALL failed — this is NOT a leak finding. Binary download/extract to ${BINDIR} failed (curl exit 23 = write failure: check runner disk space) and the Docker fallback is unavailable. On self-hosted runners: free disk, verify \${RUNNER_TEMP} writability, or install Docker."
+            exit 1
+          fi
+
       - name: Run gitleaks (scoped by event)
         run: |
           set -euo pipefail
-          VERSION="8.30.1"
-          curl -sSfL --retry 5 --retry-delay 5 --retry-all-errors \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
-            -o /tmp/gitleaks.tgz
-          tar -xzf /tmp/gitleaks.tgz -C /usr/local/bin gitleaks
           CONFIG=""
           [ -f .gitleaks.toml ] && CONFIG="--config .gitleaks.toml"
           BASE=""
@@ -67,8 +97,8 @@ jobs:
           fi
           if [ -n "${BASE:-}" ] && git cat-file -e "$BASE" 2>/dev/null; then
             echo "scanning new commits only: $BASE..HEAD"
-            gitleaks git . --redact --verbose $CONFIG --log-opts="$BASE..HEAD"
+            $GITLEAKS_CMD git . --redact --verbose $CONFIG --log-opts="$BASE..HEAD"
           else
             echo "no resolvable base — scanning full history"
-            gitleaks git . --redact --verbose $CONFIG
+            $GITLEAKS_CMD git . --redact --verbose $CONFIG
           fi
