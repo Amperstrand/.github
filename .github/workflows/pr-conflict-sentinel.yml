@@ -1,0 +1,76 @@
+# PR conflict sentinel — warn when two open PRs close the same issues.
+#
+# Born 2026-10-31: three agents independently fixed the same tollgate-lab
+# review-debt wave in one evening (PRs #27/#28/#32 — two were withdrawn).
+# This advisory sentinel posts ONE deduplicated comment when a PR's closing
+# references (closes/fixes/resolves #N) collide with another OPEN PR's.
+# It never blocks the PR; humans/agents decide who withdraws.
+#
+# Callers must grant pull-requests:read (commenting happens with the same
+# token; write is requested only when a collision is found):
+#   jobs:
+#     conflict-sentinel:
+#       uses: Amperstrand/.github/.github/workflows/pr-conflict-sentinel.yml@main
+#   permissions:
+#     pull-requests: write
+#     contents: read
+name: PR conflict sentinel
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  sentinel:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Detect cross-PR closing-reference collisions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -eu
+          this_body=$(gh pr view "$PR" -R "$REPO" --json title,body --jq '.title + "\n" + (.body // "")')
+          refs=$(printf '%s\n' "$this_body" \
+            | grep -oiE '(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved) #[0-9]+' \
+            | grep -oE '[0-9]+$' | sort -un || true)
+          if [ -z "$refs" ]; then
+            echo "no closing references in PR #$PR — nothing to check"
+            exit 0
+          fi
+          echo "this PR closes: $(echo "$refs" | tr '\n' ' ')"
+          mapfile -t rows < <(gh api "repos/$REPO/pulls?state=open&per_page=100" \
+            --jq '.[] | "#\(.number)\u0009\(.title)\u0009\(.body // "")')
+          alerts=""
+          for n in $refs; do
+            for row in "${rows[@]}"; do
+              other=$(printf '%s' "$row" | cut -f1)
+              title=$(printf '%s' "$row" | cut -f2)
+              body=$(printf '%s' "$row" | cut -f3)
+              [ "$other" = "#$PR" ] && continue
+              if printf '%s' "$row" | grep -qiE "(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved) #$n([^0-9]|$)"; then
+                alerts+="- issue #$n is also closed by $other — $title"$'\n'
+              fi
+            done
+          done
+          if [ -z "$alerts" ]; then
+            echo "no collisions"
+            exit 0
+          fi
+          marker="pr-conflict-sentinel"
+          existing=$(gh pr view "$PR" -R "$REPO" --json comments --jq '.comments[].body' | grep -c "$marker" || true)
+          if [ "$existing" -gt 0 ]; then
+            echo "collision already reported — skipping duplicate comment"
+            exit 0
+          fi
+          gh pr comment "$PR" -R "$REPO" --body "<!-- $marker -->
+          **PR conflict sentinel:** this PR's closing references collide with other OPEN PRs:
+
+          $alerts
+          Two PRs closing the same issue will race at merge. Coordinate now: one PR proceeds, the other withdraws (a claim comment or self-assignment on the issue prevents this class entirely — see project-context AGENTS.md §2)."
+          echo "collision reported"
